@@ -31,9 +31,6 @@ namespace RunInBackground
     /// </summary>
     internal static class BackgroundThrottle
     {
-        private static bool _lastFocused = true;
-        private static bool _hasFocusState;
-
         private static bool _throttled;
         private static int _savedVSync;
         private static int _savedTargetFrameRate;
@@ -41,54 +38,53 @@ namespace RunInBackground
         /// <summary>
         /// Polled once per frame. Application.isFocused is read directly rather than hooking
         /// GameManager.OnApplicationFocus, because this mod's own prefix suppresses that method
-        /// for the whole no-pause behaviour. Polling is also self-correcting: if the throttle
-        /// ever ends up applied at the wrong moment, the next frame puts it back.
+        /// for the whole no-pause behaviour.
+        ///
+        /// The throttle is re-asserted on EVERY frame while unfocused, not just when focus
+        /// changes. The game applies its own video settings at moments this mod does not
+        /// control -- notably during startup, and whenever the player changes a video option --
+        /// and doing so puts vSyncCount back to 1, which silently undoes the throttle. Acting
+        /// only on the focus transition leaves the game free-running from then on, with nothing
+        /// to notice or correct it. Measured: launching the game while already tabbed away left
+        /// it pegged at ~97% GPU indefinitely.
+        ///
+        /// Re-asserting is guarded by equality checks, so in the steady state this costs two
+        /// comparisons per frame and writes nothing.
         /// </summary>
         internal static void Poll()
         {
             bool focused = Application.isFocused;
+            int cap = Settings.BackgroundFpsCap;
 
-            if (_hasFocusState && focused == _lastFocused)
-            {
-                return;
-            }
-
-            _lastFocused = focused;
-            _hasFocusState = true;
-
-            if (focused)
+            // Focused, or the player asked for no limit at all: give back whatever they had.
+            // Restore() is idempotent, so repeating this every frame writes nothing.
+            if (focused || cap <= 0)
             {
                 Restore();
-            }
-            else
-            {
-                Apply();
-            }
-        }
-
-        private static void Apply()
-        {
-            if (_throttled)
-            {
                 return;
             }
 
-            int cap = Settings.BackgroundFpsCap;
-            if (cap <= 0)
+            if (!_throttled)
             {
-                // 0 means "no limit" -- the behaviour of every release before this one.
-                return;
+                // Remember what the player actually had, rather than assuming the defaults.
+                // Someone playing with vsync turned off in the game's own video options must not
+                // have it silently switched back on when they alt-tab back in. Captured once, on
+                // the way in -- never re-captured while throttled, or we would latch our own
+                // values and lose theirs.
+                _savedVSync = QualitySettings.vSyncCount;
+                _savedTargetFrameRate = Application.targetFrameRate;
+                _throttled = true;
             }
 
-            // Remember what the player actually had, rather than assuming the defaults. Someone
-            // playing with vsync turned off in the game's own video options must not have it
-            // silently switched back on when they alt-tab back in.
-            _savedVSync = QualitySettings.vSyncCount;
-            _savedTargetFrameRate = Application.targetFrameRate;
-            _throttled = true;
+            if (QualitySettings.vSyncCount != 0)
+            {
+                QualitySettings.vSyncCount = 0;
+            }
 
-            QualitySettings.vSyncCount = 0;
-            Application.targetFrameRate = cap;
+            if (Application.targetFrameRate != cap)
+            {
+                Application.targetFrameRate = cap;
+            }
         }
 
         private static void Restore()
