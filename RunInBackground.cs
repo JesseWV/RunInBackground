@@ -10,7 +10,12 @@ namespace RunInBackground
 	{
 		public override void OnInitializeMelon()
 		{
-            
+            Settings.Init();
+        }
+
+		public override void OnUpdate()
+		{
+            BackgroundThrottle.Poll();
         }
 
 		public override void OnSceneWasLoaded(int buildIndex, string sceneName)
